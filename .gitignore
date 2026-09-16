@@ -44,4 +44,4 @@ figures/
 
 # IDE
 .vscode/
-.idea/
+.idea/*.numbers
