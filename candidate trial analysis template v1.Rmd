@@ -1,0 +1,431 @@
+---
+title: "Candidate Trial Analysis Template"
+author: "Lian Rui"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+## Packages
+
+```{r packages}
+library(readxl) # Import excel
+library(readr) # Read text with delim "|"
+library(tidyverse)
+library(lubridate)
+library(ggraph) # Network plot
+```
+
+```{r}
+source("~/Library/Mobile Documents/com~apple~CloudDocs/Project2026/OSA and siRNA/R/load_candidate.R")
+```
+
+
+## Load Raw data
+
+### Load MeSH tables
+
+```{r MeSH setup}
+# labels
+mesh_labels <- read_csv("~/Documents/MeSH/mesh_labels.csv")
+
+# parents in tree structure
+mesh_parent <- read_csv("~/Documents/MeSH/mesh_parent.csv")
+
+# tree structure
+mesh_tree <- read_csv("~/Documents/MeSH/mesh_tree.csv")
+
+# Tree name
+tree_names <- read_csv("~/Documents/MeSH/tree_names.csv")
+```
+
+#### TODO: How to avoid the repeat call of `read_csv`, any elegant methods. 
+
+### Load AACT tables
+
+```{r AACT setup}
+# studies
+studies <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/studies.txt", 
+                      delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# Select columns of studies
+studies <- studies |>
+  select(nct_id, 
+         study_first_submitted_date, 
+         start_date, 
+         completion_date, 
+         study_type, 
+         brief_title, 
+         official_title, 
+         overall_status, 
+         phase, 
+         enrollment, 
+         source, 
+         source_class) |>
+  filter(source_class == "INDUSTRY")
+
+
+# MeSH condition
+browse_conditions <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/browse_conditions.txt",
+                                delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# conditions
+# conditions <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/conditions.txt",
+#                                 delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# MeSH intervention
+browse_interventions <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/browse_interventions.txt",
+                               delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# Interventions.txt
+# interventions <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/interventions.txt",
+#                                delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# intervention_other_names.txt
+# intervention_other_names <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/intervention_other_names.txt",
+#                                delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# Countries
+# For the disease area analysis, country is not needed
+countries <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/countries.txt", 
+                         delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# design_groups
+#design_groups <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/design_groups.txt", 
+#                            delim = "|", escape_double = FALSE, trim_ws = TRUE)
+## design_groups is not very useful for now. 
+
+# designs outcomes
+# The endpoint of each trial
+# design_outcomes <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/design_outcomes.txt",
+#                               delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# designs <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/designs.txt", 
+#     delim = "|", escape_double = FALSE, trim_ws = TRUE)
+# View(designs)
+
+# facilities
+#facilities <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/facilities.txt", 
+#                         delim = "|", escape_double = FALSE, trim_ws = TRUE)
+## Put facilities on hold
+
+# sponsors
+sponsors <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/sponsors.txt", 
+                       delim = "|", escape_double = FALSE, trim_ws = TRUE)
+```
+
+#### TODO: new approach, maybe modular to avoid many `read_delim`. 
+
+#### TODO: all the AACT files in this path `/Volumes/My Passport/aact_Aug_2026_csv/`, create a path variable and paste the file name, e.g., `sponsors.txt` would be more clean. 
+
+### Load candidate nct_id
+
+```{r}
+path <- "~/Library/Mobile Documents/com~apple~CloudDocs/Project2026/OSA and siRNA/ASO and siRNA/"
+
+nct_id <- "aso nct_id sep.xlsx"
+
+nct_id_link <- paste0(path, nct_id)
+```
+
+```{r}
+candidate <- load_candidate(nct_id_link)
+```
+
+#### TODO: function ready
+
+## Candidate analysis
+
+### Trend: Number of trials each year in last five year
+
+```{r number of trials by year}
+trial_number_year <- studies |>
+  select(nct_id, study_first_submitted_date) |>
+  left_join(candidate, by = join_by(nct_id)) |>
+  drop_na() |>
+  mutate(year = year(study_first_submitted_date)) 
+
+dat <- trial_number_year |>
+  group_by(year) |>
+  summarise(n = n())
+
+ggplot(dat) + 
+  geom_col(aes(x = year, y = n), 
+           fill = "steelblue") + 
+  labs(title = "Trend of of ASO trials in Global", 
+       y = "Number of trials") + 
+  theme_minimal()
+```
+
+### Trend: Duration of trials by year, phase
+
+```{r duration of trials by year and phase}
+trial_duration <- studies |>
+  select(nct_id, start_date, completion_date, phase) |>
+  mutate(year = year(start_date))|>
+  filter(year >= 2020) |>
+  left_join(candidate, by = join_by(nct_id)) |>
+  drop_na() |>
+  mutate(
+    time_interval = round(
+      time_length(interval(start_date, completion_date), "months"),
+      1
+    )
+  )
+  
+ggplot(trial_duration, aes(x = factor(year), y = time_interval)) + 
+  geom_point() + 
+  geom_boxplot(aes(x = factor(year))) + 
+  facet_grid(phase~.)
+```
+
+### Trend: enrollment
+
+```{r enrollment by year and phase}
+enrollment <- studies |>
+  select(nct_id, study_first_submitted_date, phase, enrollment) |>
+  mutate(year = year(study_first_submitted_date)) |>
+  filter(year >= 2021) |>
+  left_join(candidate, by = join_by(nct_id)) |>
+  filter(!is.na(phase))
+
+ggplot(enrollment, aes(x = factor(year), y = enrollment)) +
+  geom_point() + 
+  geom_boxplot() + 
+  facet_grid(phase~., scales = "free_y")
+```
+
+#### TODO Trend: enrollment by disease
+
+### Trend: Number of trials by sponsor
+
+```{r number of trials by sponsor}
+number_trial_sponsor <- studies |>
+  select(nct_id, study_first_submitted_date, phase, source) |>
+  mutate(year = year(study_first_submitted_date)) |>
+  filter(year >= 2021) |>
+  filter(!is.na(phase)) |>
+  right_join(candidate, by = join_by(nct_id)) |>
+  drop_na() |>
+  summarise(n = n(), .by = c(source, phase)) |>
+  group_by(phase) |>
+  slice_max(n, n = 10, with_ties = FALSE) |>
+  arrange(phase, desc(n)) |>
+  ungroup()
+
+ggplot(number_trial_sponsor, aes(reorder(source, n, FUN = sum), n))  + 
+  geom_col(aes(fill = phase)) + 
+  labs(title = "Number of ASO trials by sponsor and phase", 
+       x = "Sponsors", 
+       y = "") + 
+  coord_flip() + 
+  theme_minimal()
+```
+
+### Global MeSH analysis
+
+```{r Join candidate with aact}
+# Filter the candidate studies from the master studies tables
+# Create candidate specific study table. 
+candidate_study <- studies %>%
+  filter(nct_id %in% candidate$nct_id)
+
+# join candidate_study with browse_condition
+candidate_study <- candidate_study %>%
+  left_join(browse_conditions, by = "nct_id")
+
+# Join candidate_study with countries
+candidate_study <- candidate_study %>%
+  left_join(countries, by = "nct_id")
+
+# Join candidate_study with facilities
+#adc_study <- adc_study %>%
+#  left_join(facilities, by = "nct_id")
+## Put facilities on hold
+
+# Join candidate_study with sponsors
+candidate_study <- candidate_study %>%
+  left_join(sponsors, by = "nct_id")
+```
+
+```{r rename columns}
+# Rename the candidate_study
+candidate_study <- candidate_study |>
+  rename(country = name.x, 
+         company = name.y)
+```
+
+```{r column selection}
+# Select columns
+candidate_study <- candidate_study %>%
+  select(nct_id, study_first_submitted_date, start_date, 
+         completion_date, study_type, brief_title, official_title, 
+         overall_status, phase, enrollment, source, source_class, 
+         downcase_mesh_term, mesh_type, country, company)
+
+# There is a column source in study, which is the info of a study
+# the source is contained in table sponsor, column company
+# a single study may have many companies, e.g, 
+# NCT02508090 has two companies: Santaris Pharma A/S and Hoffmann-La Roche
+# As such, remove the column company, but the agency_type should be kept to
+# Filter the Industry studies
+candidate_study <- candidate_study |>
+  select(!company)
+```
+
+```{r filter industry study}
+# The industry only
+candidate_study <- candidate_study %>%
+  filter(source_class %in% "INDUSTRY") |>
+  distinct()
+```
+
+```{r remove mesh-ancestor}
+# Each study nct_id has many MeSH terms, 
+# Most of them are mesh-ancestor
+# i.e., the upper hierarchies of a special condition
+# e.g., cystic fibrosis has ancestors like congenital, hereditary, and neonatal diseases and abnormalities, genetic diseases, inborn...
+# As such, to remove the mesh-ancestor mesh type
+# the more detailed hierarchy will be recreated using standalone mesh data
+candidate_study <- candidate_study |>
+  filter(mesh_type %in% "mesh-list") |>
+  distinct()
+
+# Join the drug name in table candidate
+candidate_study <- candidate_study |>
+  left_join(candidate, by = join_by(nct_id))
+```
+
+```{r network functions}
+source("R/mesh_network_with_drug.R")
+```
+
+```{r network plot}
+# ---------------------------------------------------------
+# 1. Prepare trial data
+# ---------------------------------------------------------
+
+ta <- candidate_study |> 
+  filter( phase == "PHASE1", 
+          mesh_type == "mesh-list", 
+          source_class == "INDUSTRY" ) |> 
+  select(-any_of(c("country", "year"))) |> 
+  distinct() |> 
+  mutate( year = lubridate::year(study_first_submitted_date) ) |> 
+  relocate( year, .after = study_first_submitted_date ) |> 
+  filter(year >= 2021) |> 
+  arrange(year)
+
+# ---------------------------------------------------------
+# 2. Count trials for each MeSH condition
+# ---------------------------------------------------------
+
+condition_trials <- ta |>
+  distinct(
+    nct_id,
+    downcase_mesh_term
+  ) |>
+  count(
+    downcase_mesh_term,
+    name = "n_trials"
+  ) 
+
+# ---------------------------------------------------------
+# 3. Get MeSH hierarchy
+# ---------------------------------------------------------
+
+candidate_hierarchy <- get_hierarchy(
+  unique(ta$downcase_mesh_term),
+  tree_names
+)
+
+candidate_hierarchy <- ta |>
+  select(downcase_mesh_term, drug) |>
+  left_join(
+    candidate_hierarchy,
+    by = c( "downcase_mesh_term" = "query_name")
+  )
+
+candidate_hierarchy <- candidate_hierarchy |>
+  rename("query_name" = "downcase_mesh_term")
+
+# ---------------------------------------------------------
+# 4. Compress hierarchy
+#    Cxx -> disease
+#    + number of trials
+# ---------------------------------------------------------
+
+hierarchy_network <- compress_hierarchy(
+  candidate_hierarchy,
+  condition_trials
+)
+
+# ---------------------------------------------------------
+# 5. Create network
+# ---------------------------------------------------------
+
+candidate_network <- make_mesh_network(
+  hierarchy_network
+)
+
+plot_mesh_network(candidate_network)
+```
+
+## China study
+
+```{r filter China}
+# China study
+candidate_china <- candidate_study %>%
+  filter(country %in% "China")
+
+# Remove the column drug
+# This represent the global
+# Not all the drugs are used in China
+candidate_china <- candidate_china |>
+  select(!drug)
+
+# Join browse intervention by nct_id in China
+candidate_china <- candidate_china |>
+  mutate(year = year(study_first_submitted_date)) |>
+  relocate(year, .after = study_first_submitted_date) |>
+  filter(year >= 2021) |>
+  left_join(browse_interventions, by = join_by(nct_id)) |>
+  select(
+    -mesh_term, # keep downcase column only
+    -id
+  ) |>
+  rename("disease" = "downcase_mesh_term.x",
+         "drug" = "downcase_mesh_term.y") |>
+  filter(mesh_type.x == "mesh-list", 
+         mesh_type.y == "mesh-list") |>
+  distinct() |>
+  arrange(phase)
+
+candidate_china <- candidate_china |>
+  select(nct_id,brief_title, official_title,  drug, source, phase, enrollment, disease)
+```
+
+```{r select candidate China columns}
+candidate_china <- candidate_china |>
+  select(nct_id, drug, source, phase, enrollment, disease) |>
+  distinct()
+```
+
+```{r write table}
+write_csv(candidate_china, "candidate_china.csv")
+```
+
+
+## TODO
+
+1. Modular import of MeSH and AACT, no repeated `read_csv` or `read_delim`
+
+2. `ASO` and `siRNA` as candidate category variable and change all the titles in output plot, table etc automatically
+
+3. Explore and modify the ggplot output, auto save a plot as `PNG` with size fitted the keynote slide paste. 
+
+4. Repeat over a phase string `"PHASE3, PHASE2, PHASE1/PHASE2, PHASE 1"`and save each network plot

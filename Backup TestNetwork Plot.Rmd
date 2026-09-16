@@ -1,0 +1,786 @@
+---
+title: "Untitled"
+author: "Lian Rui"
+date: "2026-09-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+## Packages
+
+```{r packages}
+library(readxl) # import excel
+library(readr) # read text with delim "|"
+library(tidyverse)
+library(lubridate)
+```
+
+## MeSH setup
+
+Run `MeSH Processing.Rmd` to load data and functions
+
+Skip the chunk below. 
+
+```{r MeSH import}
+# A new, standalone MeSH data with hierarchical structure will be used to analyze the TA. 
+
+# Skip this chunk. 
+
+# Import mesh headings
+# mesh_terms <- read_csv("/Users/lr/mesh_terms_202609100930.csv")
+# 
+# # Select columns qualifier and down_case_term
+# mesh_terms <- mesh_terms %>%
+#   select(qualifier, downcase_mesh_term)
+# 
+# mesh_headings <- read_csv("/Users/lr/mesh_headings_202609100925.csv")
+# 
+# # Select qualifier and heading in mesh_headings
+# mesh_headings <- mesh_headings |>
+#   select(qualifier, heading) |>
+#   distinct()
+```
+
+## Getting data 1: AACT setup
+
+```{r AACT import}
+# MeSH condition
+browse_conditions <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/browse_conditions.txt",
+                                delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# MeSH intervention
+#browse_interventions <- read_delim("/Volumes/My #Passport/aact_Aug_2026_csv/browse_interventions.txt",
+#                                delim = "|", escape_double = FALSE, trim_ws = TRUE)
+## MeSH intervention does not include some investigational drugs
+
+# Interventions.txt, TBD
+
+# intervention_other_names.txt, TBD
+
+
+# Countries
+# For the disease area analysis, country is not needed
+countries <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/countries.txt", 
+                         delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# design_groups
+#design_groups <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/design_groups.txt", 
+#                            delim = "|", escape_double = FALSE, trim_ws = TRUE)
+## design_groups is not very useful for now. 
+
+# designs outcomes
+# The endpoint of each trial
+design_outcomes <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/design_outcomes.txt",
+                              delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# designs <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/designs.txt", 
+#     delim = "|", escape_double = FALSE, trim_ws = TRUE)
+# View(designs)
+
+# facilities
+#facilities <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/facilities.txt", 
+#                         delim = "|", escape_double = FALSE, trim_ws = TRUE)
+## Put facilities on hold
+
+# sponsors
+sponsors <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/sponsors.txt", 
+                       delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# studies
+studies <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/studies.txt", 
+                      delim = "|", escape_double = FALSE, trim_ws = TRUE)
+```
+
+## ASO analysis
+
+### ASO nct_id
+
+```{r}
+# Import the nct_id on ADC
+# This is from AACT PostgreSQL in dbeaver
+# Fetched data pasted in excel
+aso <- read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Project2026/OSA and siRNA/ASO and siRNA/aso nct_id sep.xlsx", col_names = FALSE)
+
+# Remove the duplicated rows
+# Why duplicated rows: 
+# Same word is used to search multiple tables in AACT
+# and same nct_id and drug name are returned
+aso <- aso %>%
+  distinct()
+
+# Column names
+colnames(aso) <- c("drug", "nct_id")
+
+# Remove drug name = RNA, Antisense
+#aso <- aso %>%
+#  filter(!drug %in% "RNA, Antisense")
+
+# Many minor difference on drug names
+# drug name to lower case and distinct value again
+aso <- aso %>%
+  mutate(drug = trimws(drug)) %>%
+  mutate(drug = tolower(drug)) %>%
+  distinct()
+
+# Filter the ASO studies from the master studies tables
+# Create aso specific study table. 
+aso_study <- studies %>%
+  filter(nct_id %in% aso$nct_id)
+```
+
+
+```{r Join aso with aact}
+# join aso_study with browse_condition
+aso_study <- aso_study %>%
+  left_join(browse_conditions, by = "nct_id")
+
+# Join aso_study with countries
+aso_study <- aso_study %>%
+  left_join(countries, by = "nct_id")
+
+# Join aso_study with facilities
+#adc_study <- adc_study %>%
+#  left_join(facilities, by = "nct_id")
+## Put facilities on hold
+
+# Join aso_study with sponsors
+aso_study <- aso_study %>%
+  left_join(sponsors, by = "nct_id")
+```
+
+
+```{r rename columns}
+# Rename the aso_study
+aso_study <- aso_study |>
+  rename(country = name.x, 
+         company = name.y)
+```
+
+
+```{r column selection}
+# Select columns
+aso_study <- aso_study %>%
+  select(nct_id, study_first_submitted_date, start_date, 
+         completion_date, study_type, brief_title, official_title, 
+         overall_status, phase, enrollment, source, source_class, 
+         downcase_mesh_term, mesh_type, country, company)
+
+
+# There is a column source in study, which is the info of a study
+# the source is contained in table sponsor, column company
+# a single study may have many companies, e.g, 
+# NCT02508090 has two companies: Santaris Pharma A/S and Hoffmann-La Roche
+# As such, remove the column company, but the agency_type should be kept to
+# Filter the Industry studies
+aso_study <- aso_study |>
+  select(!company)
+```
+
+
+```{r Industry study}
+# The industry only
+aso_study <- aso_study %>%
+  filter(source_class %in% "INDUSTRY") |>
+  distinct()
+```
+
+```{r Remove mesh-ancestor}
+# Each study nct_id has many MeSH terms, 
+# Most of them are mesh-ancestor
+# i.e., the upper hierarchies of a special condition
+# e.g., cystic fibrosis has ancestors like congenital, hereditary, and neonatal diseases and abnormalities, genetic diseases, inborn...
+# As such, to remove the mesh-ancestor mesh type
+# the more detailed hierarchy will be recreated using standalone mesh data
+aso_study <- aso_study |>
+  filter(mesh_type %in% "mesh-list") |>
+  distinct()
+```
+
+## MeSH analysis
+
+### Phase 1
+
+```{r}
+# Remove the mesh-ancestor in mesh_type
+ta <- aso_study %>%
+  filter(phase %in% "PHASE3") |>
+  filter(mesh_type %in% "mesh-list")
+
+# Join the aso_study with meshterm
+ta <- ta |>
+  select(!country) |>
+  distinct()
+
+# Join aso_study with mesh headings, by = qualifier
+ta <- ta |>
+  filter(source_class %in% "INDUSTRY")
+
+# Create year in ta_data
+ta <- ta |>
+  mutate(year = year(study_first_submitted_date)) |>
+  relocate(year, .after = study_first_submitted_date)
+
+#Filter the trial year >= 2021
+ta <- ta |>
+  filter(year >= 2021) |>
+  arrange(year)
+```
+
+```{r}
+compress_hierarchy <- function(hierarchy) {
+  
+  hierarchy |>
+    mutate(
+      true_stem = stringr::str_extract(
+        target_tree,
+        "^C\\d{2}"
+      )
+    ) |>
+    filter(
+      tree_number == target_tree
+    ) |>
+    transmute(
+      query_name,
+      true_stem,
+      leaf_id = mesh_id,
+      leaf_name = mesh_name
+    ) |>
+    filter(
+      !is.na(true_stem),
+      !is.na(leaf_name)
+    ) |>
+    distinct(
+      true_stem,
+      leaf_id,
+      leaf_name,
+      .keep_all = TRUE
+    )
+}
+```
+
+```{r}
+hierarchy_network <- compress_hierarchy(
+  ta
+)
+```
+
+```{r}
+make_mesh_network <- function(hierarchy) {
+  
+  # -------------------------------
+  # Edges: Cxx -> disease
+  # -------------------------------
+  
+  edges <- hierarchy |>
+    transmute(
+      from = true_stem,
+      to = leaf_name
+    ) |>
+    filter(
+      !is.na(from),
+      !is.na(to),
+      from != to
+    ) |>
+    distinct()
+  
+  
+  # -------------------------------
+  # Category nodes
+  # -------------------------------
+  
+  category_nodes <- hierarchy |>
+    distinct(true_stem) |>
+    transmute(
+      name = true_stem,
+      mesh_name = true_stem,
+      true_stem = true_stem,
+      level = "category"
+    )
+  
+  
+  # -------------------------------
+  # Disease nodes
+  # -------------------------------
+  
+  disease_nodes <- hierarchy |>
+    distinct(
+      leaf_name,
+      true_stem
+    ) |>
+    transmute(
+      name = leaf_name,
+      mesh_name = leaf_name,
+      true_stem = true_stem,
+      level = "leaf"
+    )
+  
+  
+  # -------------------------------
+  # Combine nodes
+  # -------------------------------
+  
+  nodes <- bind_rows(
+    category_nodes,
+    disease_nodes
+  ) |>
+    distinct(
+      name,
+      .keep_all = TRUE
+    )
+  
+  
+  list(
+    nodes = nodes,
+    edges = edges
+  )
+}
+```
+
+
+```{r}
+aso_network <- make_mesh_network(
+  hierarchy_network
+)
+
+nodes <- aso_network$nodes
+edges <- aso_network$edges
+```
+
+```{r}
+library(igraph)
+
+g <- graph_from_data_frame(
+  d = edges,
+  directed = TRUE,
+  vertices = nodes
+)
+```
+
+
+```{r}
+nrow(nodes)
+nrow(edges)
+
+anyNA(edges$from)
+anyNA(edges$to)
+```
+
+```{r}
+igraph::vertex_attr_names(g)
+```
+
+```{r}
+set.seed(123)
+
+ggraph(g, layout = "fr") +
+  
+  geom_edge_link(
+    arrow = arrow(
+      length = unit(1.5, "mm"),
+      type = "open"
+    ),
+    end_cap = circle(1, "mm"),
+    alpha = 0.2
+  ) +
+  
+  geom_node_point(
+    aes(size = level, 
+        color = ifelse(level == "category", true_stem, "leaf")), 
+    show.legend = FALSE
+  ) +
+  
+  geom_node_text(
+    aes(label = mesh_name, 
+        color = level),
+    repel = TRUE,
+    force = 3,
+    size = 3.5, 
+    show.legend = FALSE
+  ) +
+  
+  scale_size_manual(
+    values = c(
+      category = 6,
+      leaf = 3.5
+    )
+  ) +
+  theme(legend.position  = "none") + 
+  theme_void()
+```
+
+
+
+```{r}
+set.seed(123)
+
+ggraph(g, layout = "fr") +
+  
+  geom_edge_link(
+    arrow = arrow(
+      length = unit(1.5, "mm"),
+      type = "open"
+    ),
+    end_cap = circle(1, "mm"),
+    alpha = 0.2
+  ) +
+  
+  geom_node_point(
+    aes(size = level, 
+        color = ifelse(level == "category", true_stem, "leaf"), 
+        show.legend = FALSE)
+  ) +
+  
+  geom_node_text(
+    aes(label = mesh_name, 
+        color = level),
+    repel = TRUE,
+    force = 3,
+    size = 3.5, 
+    show.legend = FALSE
+  ) +
+  
+  scale_size_manual(
+    values = c(
+      category = 6,
+      leaf = 3.5
+    )
+  ) +
+  theme(legend.position  = "none") + 
+  facet_nodes(~ true_stem) +
+  theme_void()  
+
+```
+
+
+##########################
+
+
+
+```{r}
+# Remove the mesh-ancestor in mesh_type
+ta <- aso_study %>%
+  filter(phase %in% "PHASE1") |>
+  filter(mesh_type %in% "mesh-list")
+
+# Join the aso_study with meshterm
+ta <- ta |>
+  select(!country) |>
+  distinct()
+
+# Join aso_study with mesh headings, by = qualifier
+ta <- ta |>
+  filter(source_class %in% "INDUSTRY")
+
+# Create year in ta_data
+ta <- ta |>
+  mutate(year = year(study_first_submitted_date)) |>
+  relocate(year, .after = study_first_submitted_date)
+
+#Filter the trial year >= 2021
+ta <- ta |>
+  filter(year >= 2021) |>
+  arrange(year)
+
+# A string of all the downcase_mesh_term in aso_ta
+aso_condition_phase_1 <- ta$downcase_mesh_term
+
+# Remove duplicated terms
+aso_condition_phase_1 <- unique(aso_condition_phase_1)
+
+
+# Use the aso_condition to create mesh hierarchy
+aso_hierarchy_phase_1 <- get_hierarchy(aso_condition_phase_1, tree_names)
+```
+
+
+```{r}
+# Create true_stem
+hierarchy_network <- aso_hierarchy_phase_1 |>
+  mutate(
+    true_stem = stringr::str_extract(
+      tree_number,
+      "^C\\d{2}"
+    )
+  )
+```
+
+
+```{r}
+compress_hierarchy <- function(hierarchy) {
+  
+  hierarchy |>
+    dplyr::mutate(
+      # Identify the Cxx MeSH disease category
+      # e.g. C14.280.484.048.750 -> C14
+      true_stem = stringr::str_extract(
+        target_tree,
+        "^C\\d{2}"
+      )
+    ) |>
+    
+    # Keep only the target disease itself
+    dplyr::filter(
+      tree_number == target_tree
+    ) |>
+    
+    dplyr::transmute(
+      query_name,
+      true_stem,
+      leaf_id = mesh_id,
+      leaf_name = mesh_name
+    ) |>
+    
+    dplyr::filter(
+      !is.na(true_stem),
+      !is.na(leaf_name)
+    ) |>
+    
+    dplyr::distinct(
+      true_stem,
+      leaf_id,
+      leaf_name,
+      .keep_all = TRUE
+    )
+}
+```
+
+```{r compress hierarchy}
+hierarchy_network <- compress_hierarchy(hierarchy_network)
+```
+
+
+```{r}
+make_network_3level <- function(hierarchy) {
+  
+  # ---------------------------------------
+  # Disease leaves
+  # One disease can have multiple TreeNumbers,
+  # but will become one node.
+  # ---------------------------------------
+  
+  leaves <- hierarchy |>
+    dplyr::transmute(
+      query_name,
+      true_stem,
+      leaf_id = mesh_id,
+      leaf_name = mesh_name
+    ) |>
+    dplyr::filter(
+      !is.na(true_stem),
+      !is.na(leaf_name)
+    ) |>
+    dplyr::distinct(
+      true_stem,
+      leaf_id,
+      leaf_name,
+      .keep_all = TRUE
+    )
+  
+  
+  # ---------------------------------------
+  # Edges
+  # Cxx -> disease
+  # ---------------------------------------
+  
+  edges <- leaves |>
+    dplyr::transmute(
+      from = true_stem,
+      to = leaf_name
+    ) |>
+    dplyr::distinct()
+  
+  
+  # ---------------------------------------
+  # Nodes
+  # ---------------------------------------
+  
+  category_nodes <- leaves |>
+    dplyr::distinct(true_stem) |>
+    dplyr::transmute(
+      name = true_stem,
+      mesh_name = true_stem,
+      true_stem = true_stem,
+      level = "category"
+    )
+  
+  disease_nodes <- leaves |>
+    dplyr::distinct(
+      true_stem,
+      leaf_name
+    ) |>
+    dplyr::transmute(
+      name = leaf_name,
+      mesh_name = leaf_name,
+      true_stem = true_stem,
+      level = "leaf"
+    )
+  
+  
+  nodes <- dplyr::bind_rows(
+    category_nodes,
+    disease_nodes
+  ) |>
+    dplyr::distinct(
+      name,
+      .keep_all = TRUE
+    )
+  
+  
+  list(
+    nodes = nodes,
+    edges = edges
+  )
+}
+```
+
+
+
+```{r hierarchy data to network data}
+aso_network <- make_network_3level(aso_hierarchy)
+
+nodes <- aso_network$nodes
+edges <- aso_network$edges
+```
+
+
+```{r}
+library(igraph)
+
+g <- graph_from_data_frame(
+  d = edges,
+  directed = TRUE,
+  vertices = nodes
+)
+```
+
+
+```{r}
+set.seed(123)
+
+ggraph(g, layout = "fr") +
+  
+  geom_edge_link(
+    arrow = arrow(
+      length = unit(2.5, "mm"),
+      type = "open"
+    ),
+    end_cap = circle(1, "mm"),
+    alpha = 0.5
+  ) +
+  
+  geom_node_point(
+    size = 4
+  ) +
+  
+  geom_node_text(
+    aes(label = mesh_name),
+    repel = TRUE,
+    force = 3, 
+    size = 3.5
+  ) +
+  
+  theme_void()
+```
+
+```{r}
+ggraph(g, layout = "fr") +
+  
+  geom_edge_link(
+    arrow = arrow(
+      length = unit(1.5, "mm"),
+      type = "open"
+    ),
+    end_cap = circle(1, "mm"),
+    alpha = 0.5
+  ) +
+  
+  geom_node_point(
+    size = 4
+  ) +
+  
+  geom_node_text(
+    aes(label = mesh_name),
+    repel = TRUE,
+    force = 3,
+    size = 3.5
+  ) +
+  
+  facet_nodes(~ true_stem) +
+  
+  theme_void()
+```
+
+
+#################
+
+```{r trend of ta}
+# Put on hold after the TA network is done!
+
+# # DVIZ the trend of downcase mesh term by year
+# tmp <- ta_data |>
+#   group_by(year, heading) |>
+#   summarise(n = n())|>
+#   arrange(year) |>
+#   filter(year >= 2021)
+# 
+# ggplot(tmp) + 
+#   geom_col(
+#     aes(x = heading, y = n, fill = heading),
+#     show.legend = FALSE
+#   ) + 
+#   facet_grid(year ~ ., scales = "free_y") + 
+#   coord_flip() +
+#   labs(title = "Globally, number of trials of ASO by therapeutic areas from 2021 to 2026", 
+#        caption = "clinicaltrial.gov") + 
+#   theme_minimal() + 
+#   theme(axis.text.y = element_text(size = 8), 
+#         axis.title.y = element_blank())
+```
+
+
+## China study
+
+
+```{r}
+# China study
+aso_study <- aso_study %>%
+  filter(name.x %in% "China")
+```
+
+
+## Report table
+
+```{r}
+# Filter the mesh_list in column mesh_type
+# Exact condition name included without ancestor names
+aso_study <- aso_study %>%
+  filter(mesh_type %in% "mesh-list")
+
+# Filter the trials after 2023-01-01
+# submit date as date
+aso_study$study_first_submitted_date <- ymd(aso_study$study_first_submitted_date)
+# Filter study_first_submitted_date > "2023-01-01"
+aso_study <- aso_study %>%
+  filter(study_first_submitted_date > "2023-01-01")
+```
+
+
+```{r}
+aso_report <- aso_study %>%
+select(brief_title, official_title, phase, enrollment, downcase_mesh_term, 
+ name.y) %>%
+distinct() %>%
+arrange(phase)
+
+adc_report <- adc_report %>%
+drop_na()
+
+write_csv(aso_report, "aso_China.csv")
+```
+
+#######

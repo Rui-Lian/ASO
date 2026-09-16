@@ -1,0 +1,47 @@
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Quarto / R Markdown
+.quarto/
+*_cache/
+*_files/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large/local data
+data/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.sqlite
+*.db
+
+# Local outputs
+output/
+outputs/
+results/
+figures/
+
+# Secrets / credentials
+.env
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/

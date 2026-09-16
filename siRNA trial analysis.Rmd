@@ -1,0 +1,386 @@
+---
+title: "siRNA Trial Analysis"
+author: "Lian Rui"
+date: "2026-09-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+## Packages
+
+```{r}
+library(readxl) # import excel
+library(readr) # read text with delim "|"
+library(tidyverse)
+library(lubridate)
+library(ggraph)
+```
+
+## MeSH setup
+
+```{r MeSH setup}
+mesh_labels <- read_csv("~/Documents/MeSH/mesh_labels.csv")
+
+mesh_parent <- read_csv("~/Documents/MeSH/mesh_parent.csv")
+
+mesh_tree <- read_csv("~/Documents/MeSH/mesh_tree.csv")
+
+tree_names <- read_csv("~/Documents/MeSH/tree_names.csv")
+```
+
+## Getting data 1: AACT setup
+
+```{r AACT import}
+# MeSH condition
+browse_conditions <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/browse_conditions.txt",
+                                delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# MeSH intervention
+#browse_interventions <- read_delim("/Volumes/My #Passport/aact_Aug_2026_csv/browse_interventions.txt",
+#                                delim = "|", escape_double = FALSE, trim_ws = TRUE)
+## MeSH intervention does not include some investigational drugs
+
+# Interventions.txt, TBD
+
+# intervention_other_names.txt, TBD
+
+
+# Countries
+# For the disease area analysis, country is not needed
+countries <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/countries.txt", 
+                         delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# design_groups
+#design_groups <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/design_groups.txt", 
+#                            delim = "|", escape_double = FALSE, trim_ws = TRUE)
+## design_groups is not very useful for now. 
+
+# designs outcomes
+# The endpoint of each trial
+design_outcomes <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/design_outcomes.txt",
+                              delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# designs <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/designs.txt", 
+#     delim = "|", escape_double = FALSE, trim_ws = TRUE)
+# View(designs)
+
+# facilities
+#facilities <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/facilities.txt", 
+#                         delim = "|", escape_double = FALSE, trim_ws = TRUE)
+## Put facilities on hold
+
+# sponsors
+sponsors <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/sponsors.txt", 
+                       delim = "|", escape_double = FALSE, trim_ws = TRUE)
+
+# studies
+studies <- read_delim("/Volumes/My Passport/aact_Aug_2026_csv/studies.txt", 
+                      delim = "|", escape_double = FALSE, trim_ws = TRUE)
+```
+
+## sirna analysis
+
+### sirna nct_id
+
+```{r}
+# Import the nct_id on ADC
+sirna <- read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Project2026/OSA and siRNA/ASO and siRNA/siRNA nct_id sep.xlsx", col_names = FALSE)
+
+colnames(sirna) <- c("drug", "nct_id")
+
+# drug name to lower case and distinct value
+sirna <- sirna %>%
+  mutate(drug = tolower(drug)) %>%
+  distinct()
+
+# Filter the ASO studies
+sirna_study <- studies %>%
+  filter(nct_id %in% sirna$nct_id)
+```
+
+
+```{r Join aso with aact}
+# join aso_study with browse_condition
+sirna_study <- sirna_study %>%
+  left_join(browse_conditions, by = "nct_id")
+
+# Join aso_study with countries
+sirna_study <- sirna_study %>%
+  left_join(countries, by = "nct_id")
+
+# Join aso_study with facilities
+#adc_study <- adc_study %>%
+#  left_join(facilities, by = "nct_id")
+## Put facilities on hold
+
+# Join aso_study with sponsors
+sirna_study <- sirna_study %>%
+  left_join(sponsors, by = "nct_id")
+```
+
+
+```{r rename columns}
+# Rename the aso_study
+sirna_study <- sirna_study |>
+  rename(country = name.x, 
+         company = name.y)
+```
+
+
+```{r column selection}
+# Select columns
+sirna_study <- sirna_study %>%
+  select(nct_id, study_first_submitted_date, start_date, 
+         completion_date, study_type, brief_title, official_title, 
+         overall_status, phase, enrollment, source, source_class, 
+         downcase_mesh_term, mesh_type, country, company)
+
+# There is a column source in study, which is the info of a study
+# the source is contained in table sponsor, column company
+# a single study may have many companies, e.g, 
+# NCT02508090 has two companies: Santaris Pharma A/S and Hoffmann-La Roche
+# As such, remove the column company, but the agency_type should be kept to
+# Filter the Industry studies
+sirna_study <- sirna_study |>
+  select(!company)
+```
+
+
+```{r}
+# The industry only
+sirna_study <- sirna_study %>%
+  filter(source_class %in% "INDUSTRY")
+```
+
+
+```{r Remove mesh-ancestor}
+# Each study nct_id has many MeSH terms, 
+# Most of them are mesh-ancestor
+# i.e., the upper hierarchies of a special condition
+# e.g., cystic fibrosis has ancestors like congenital, hereditary, and neonatal diseases and abnormalities, genetic diseases, inborn...
+# As such, to remove the mesh-ancestor mesh type
+# the more detailed hierarchy will be recreated using standalone mesh data
+sirna_study <- sirna_study |>
+  filter(mesh_type %in% "mesh-list") |>
+  distinct()
+```
+
+
+## Mesh analysis
+
+
+```{r network functions}
+source("R/mesh_network.R")
+```
+
+
+```{r}
+# ---------------------------------------------------------
+# 1. Prepare trial data
+# ---------------------------------------------------------
+
+ta <- sirna_study %>%
+  filter(
+    phase == "PHASE3",
+    mesh_type == "mesh-list",
+    source_class == "INDUSTRY"
+  ) |>
+  select(-country) |>
+  distinct() |>
+  mutate(
+    year = lubridate::year(study_first_submitted_date)
+  ) |>
+  relocate(
+    year,
+    .after = study_first_submitted_date
+  ) |>
+  filter(year >= 2021) |>
+  arrange(year)
+```
+
+
+```{r}
+# ---------------------------------------------------------
+# 2. Count trials for each MeSH condition
+# ---------------------------------------------------------
+
+condition_trials <- ta |>
+  distinct(
+    nct_id,
+    downcase_mesh_term
+  ) |>
+  count(
+    downcase_mesh_term,
+    name = "n_trials"
+  ) 
+```
+
+
+```{r}
+# ---------------------------------------------------------
+# 3. Get MeSH hierarchy
+# ---------------------------------------------------------
+
+sirna_hierarchy_phase_3 <- get_hierarchy(
+  unique(ta$downcase_mesh_term),
+  tree_names
+)
+```
+
+
+```{r}
+# ---------------------------------------------------------
+# 4. Compress hierarchy
+#    Cxx -> disease
+#    + number of trials
+# ---------------------------------------------------------
+
+hierarchy_network <- compress_hierarchy(
+  sirna_hierarchy_phase_3,
+  condition_trials
+)
+```
+
+
+```{r}
+# ---------------------------------------------------------
+# 5. Create network
+# ---------------------------------------------------------
+
+sirna_network <- make_mesh_network(
+  hierarchy_network
+)
+
+g <- igraph::graph_from_data_frame(
+  d = sirna_network$edges,
+  directed = TRUE,
+  vertices = sirna_network$nodes
+)
+```
+
+
+```{r}
+set.seed(38360)
+
+ggraph(g, layout = "fr") +
+
+  geom_edge_link(
+    arrow = arrow(
+      length = unit(1.5, "mm"),
+      type = "open"
+    ),
+    end_cap = circle(1, "mm"),
+    alpha = 0.5
+  ) +
+
+  geom_node_point(
+    aes(
+      size = ifelse(
+        level == "category",
+        6,
+        sqrt(n_trials)
+      ),
+      color = ifelse(
+        level == "category",
+        true_stem,
+        "leaf"
+      )
+    ),
+    show.legend = FALSE
+  ) +
+
+  geom_node_text(
+    aes(label = mesh_name),
+    repel = TRUE,
+    force = 3,
+    point.padding = unit(0.15, "lines"),
+    box.padding = unit(0.3, "lines"),
+    size = 3.5,
+    show.legend = FALSE
+  ) +
+
+  scale_size_continuous(
+    range = c(3, 12)
+  ) +
+
+  scale_color_manual(
+    values = c(
+      C01 = "#E41A1C",
+      C02 = "#377EB8",
+      C03 = "#4DAF4A",
+      C04 = "#984EA3",
+      C05 = "#FF7F00",
+      C06 = "#A65628",
+      C07 = "#F781BF",
+      C08 = "#999999",
+      C09 = "#66C2A5",
+      C10 = "#FC8D62",
+      C11 = "#8DA0CB",
+      C12 = "#E78AC3",
+      C13 = "#A6D854",
+      C14 = "#FFD92F",
+      C15 = "#E5C494",
+      C16 = "#B3B3B3",
+      C17 = "#1B9E77",
+      C18 = "#D95F02",
+      C19 = "#7570B3",
+      C20 = "#E7298A",
+      C21 = "#66A61E",
+      C22 = "#E6AB02",
+      C23 = "#A6761D",
+      C24 = "#666666",
+      C25 = "#1F78B4",
+      C26 = "#B2DF8A",
+      leaf = "steelblue"
+    )
+  ) +
+
+  theme_void()
+```
+
+
+
+## China
+```{r}
+# China study
+sirna_study <- sirna_study %>%
+  filter(name.x %in% "China")
+```
+
+
+## Report table
+
+```{r}
+# Filter the mesh_list in column mesh_type
+# Exact condition name included without ancestor names
+sirna_study <- sirna_study %>%
+  filter(mesh_type %in% "mesh-list")
+
+# Filter the trials after 2023-01-01
+# submit date as date
+sirna_study$study_first_submitted_date <- ymd(sirna_study$study_first_submitted_date)
+# Filter study_first_submitted_date > "2023-01-01"
+sirna_study <- sirna_study %>%
+  filter(study_first_submitted_date > "2023-01-01")
+```
+
+
+```{r}
+sirna_report <- sirna_study %>%
+  select(brief_title, official_title, phase, enrollment, downcase_mesh_term, 
+         name.y) %>%
+  distinct() %>%
+  arrange(phase)
+
+sirna_report <- sirna_report %>%
+  drop_na()
+
+write_csv(sirna_report, "sirna_China.csv")
+```
+
+#######
